@@ -42,4 +42,5 @@ venv.bak/
 # Temporary & Log files
 *.log
 *.tmp
-.claude2agy_cache/
+.agent2agents_cache/
+.codegraph

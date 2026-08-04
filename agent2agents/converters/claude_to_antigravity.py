@@ -2,189 +2,61 @@ import os
 import json
 import sqlite3
 import subprocess
-import glob
 import re
 import uuid
-import shutil
 from datetime import datetime
 
-class ClaudeToAgyConverter:
-    def __init__(self, claude_jsonl_path=None, target_cwd=None):
+from ..adapters.claude_code import ClaudeCodeAdapter
+
+class ClaudeToAntigravityConverter:
+    def __init__(self, claude_jsonl_path=None, target_cwd=None, conversation=None):
         self.target_cwd = os.path.abspath(target_cwd or os.getcwd())
         self.claude_jsonl_path = os.path.abspath(claude_jsonl_path) if claude_jsonl_path else None
         self.user_messages = []
         self.assistant_messages = []
         self.turns = []
         self.session_id = None
+        self.conversation = None
+        self.qa_pairs = []
+        if conversation is not None:
+            self.set_conversation(conversation)
+
+    def set_conversation(self, conversation):
+        """Load any canonical conversation for native Antigravity export."""
+        if conversation is None:
+            raise ValueError("A canonical conversation is required")
+        self.conversation = conversation
+        self.qa_pairs = conversation.to_qa_pairs()
+        self.user_messages = [pair["user"] for pair in self.qa_pairs]
+        self.assistant_messages = [
+            pair["assistant"] for pair in self.qa_pairs if pair.get("assistant")
+        ]
+        self.session_id = conversation.session_id
+        return conversation
 
     @staticmethod
     def get_project_sessions(target_cwd=None):
-        """Discover and list ALL Claude session logs strictly belonging to the target project folder."""
-        target_cwd = os.path.abspath(target_cwd or os.getcwd())
-        sanitized = "-" + target_cwd.strip("/").replace("/", "-")
-        
-        projects_dir = os.path.expanduser("~/.claude/projects")
-        if not os.path.exists(projects_dir):
-            return []
-
-        # Find matching directory strictly for the current project
-        matching_dirs = []
-        target_folder = os.path.join(projects_dir, sanitized)
-
-        if os.path.exists(target_folder):
-            matching_dirs.append(target_folder)
-        else:
-            # Fallback strict directory name match
-            for d in os.listdir(projects_dir):
-                if d == sanitized:
-                    matching_dirs.append(os.path.join(projects_dir, d))
-
-        jsonl_files = []
-        for md in matching_dirs:
-            jsonl_files.extend(glob.glob(os.path.join(md, "*.jsonl")))
-
-        jsonl_files.sort(key=os.path.getmtime, reverse=True)
-
-        sessions = []
-        for fp in jsonl_files:
-            mtime_str = datetime.fromtimestamp(os.path.getmtime(fp)).strftime("%Y-%m-%d %H:%M")
-            first_prompt = "Unknown prompt"
-            try:
-                with open(fp, "r", encoding="utf-8") as f:
-                    for line in f:
-                        data = json.loads(line)
-                        if data.get("type") == "user":
-                            c = data.get("message", {}).get("content")
-                            txt = ""
-                            if isinstance(c, list):
-                                txt = "".join([item.get("text", "") for item in c if isinstance(item, dict)])
-                            elif isinstance(c, str):
-                                txt = c
-                            
-                            if txt and not txt.startswith("<local-command") and not txt.startswith("<command-name>") and not txt.startswith("<task-notification>"):
-                                if "<ide_opened_file>" in txt:
-                                    txt = txt.split("</ide_opened_file>")[-1]
-                                txt = txt.strip()
-                                if txt:
-                                    first_prompt = txt.replace("\n", " ")
-                                    break
-            except Exception:
-                pass
-
-            sessions.append({
-                "path": fp,
-                "mtime": mtime_str,
-                "first_prompt": first_prompt,
-                "filename": os.path.basename(fp)
-            })
-
-        return sessions
+        """Discover Claude sessions through the canonical Claude adapter."""
+        return ClaudeCodeAdapter.get_project_sessions(target_cwd=target_cwd)
 
     @staticmethod
     def clean_user_text(text):
-        """Clean and filter internal system/tool tags from user message strings."""
-        if not text or not isinstance(text, str):
-            return ""
-        import re
-        # Ignore system/tool notifications and local command output blocks
-        if re.match(r"^\s*<(local-command|command-name|command-message|command-stdout|local-command-caveat|task-notification)", text):
-            return ""
-        if "<ide_opened_file>" in text:
-            text = text.split("</ide_opened_file>")[-1]
-        return text.strip()
+        return ClaudeCodeAdapter.clean_user_text(text)
 
     def parse_claude_jsonl(self):
-        """Parse all user requests and assistant messages in chronological order from Claude JSONL."""
+        """Parse Claude JSONL into the shared canonical conversation format."""
         if not self.claude_jsonl_path or not os.path.exists(self.claude_jsonl_path):
             raise FileNotFoundError(f"Claude JSONL file not found: {self.claude_jsonl_path}")
 
         print(f"📖 Parsing Claude JSONL log: {self.claude_jsonl_path}")
 
-        self.turns = []
-        self.user_messages = []
-        self.assistant_messages = []
-        self.qa_pairs = []
-
-        now_iso = datetime.now().isoformat() + "Z"
-        curr_user_text = None
-        curr_user_ts = now_iso
-        curr_assistant_texts = []
-
-        with open(self.claude_jsonl_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    data = json.loads(line)
-                    if not self.session_id and data.get("sessionId"):
-                        self.session_id = data.get("sessionId")
-
-                    m_type = data.get("type")
-                    msg = data.get("message", {})
-                    timestamp = data.get("timestamp", now_iso)
-
-                    if m_type == "user":
-                        content = msg.get("content")
-                        text_parts = []
-
-                        if isinstance(content, str):
-                            cleaned = self.clean_user_text(content)
-                            if cleaned:
-                                text_parts.append(cleaned)
-                        elif isinstance(content, list):
-                            for item in content:
-                                if isinstance(item, dict):
-                                    # Ignore tool_result items in user messages
-                                    if item.get("type") == "text":
-                                        txt = self.clean_user_text(item.get("text", ""))
-                                        if txt:
-                                            text_parts.append(txt)
-
-                        if text_parts:
-                            full_user_text = "\n".join(text_parts).strip()
-                            if full_user_text:
-                                if curr_user_text is not None:
-                                    asst_ans = "\n\n".join(curr_assistant_texts).strip()
-                                    self.qa_pairs.append({
-                                        "user": curr_user_text,
-                                        "assistant": asst_ans,
-                                        "timestamp": curr_user_ts
-                                    })
-                                    self.user_messages.append(curr_user_text)
-                                    if asst_ans:
-                                        self.assistant_messages.append(asst_ans)
-                                curr_user_text = full_user_text
-                                curr_user_ts = timestamp
-                                curr_assistant_texts = []
-
-                    elif m_type == "assistant":
-                        content = msg.get("content")
-                        if isinstance(content, str):
-                            txt = content.strip()
-                            if txt and txt != "No response requested.":
-                                curr_assistant_texts.append(txt)
-                        elif isinstance(content, list):
-                            for item in content:
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    txt = item.get("text", "").strip()
-                                    if txt and txt != "No response requested.":
-                                        curr_assistant_texts.append(txt)
-
-                except Exception:
-                    pass
-
-        if curr_user_text is not None:
-            asst_ans = "\n\n".join(curr_assistant_texts).strip()
-            self.qa_pairs.append({
-                "user": curr_user_text,
-                "assistant": asst_ans,
-                "timestamp": curr_user_ts
-            })
-            self.user_messages.append(curr_user_text)
-            if asst_ans:
-                self.assistant_messages.append(asst_ans)
+        conversation = ClaudeCodeAdapter(target_cwd=self.target_cwd).read(
+            self.claude_jsonl_path
+        )
+        self.set_conversation(conversation)
 
         print(f"✅ Extracted {len(self.qa_pairs)} clean user-assistant QA turns.")
+        return self.conversation
 
     @staticmethod
     def encode_varint(n):
@@ -559,4 +431,13 @@ class ClaudeToAgyConverter:
         print("✅ Registered session for AGY CLI context memory.")
 
 
+class ConversationToAntigravityConverter(ClaudeToAntigravityConverter):
+    """Export any canonical conversation to a native Antigravity session."""
 
+    def __init__(self, conversation, target_cwd=None):
+        super().__init__(target_cwd=target_cwd, conversation=conversation)
+
+    def convert(self):
+        if not self.qa_pairs:
+            raise ValueError("No valid user-assistant turns found in the conversation!")
+        return self.create_native_session()

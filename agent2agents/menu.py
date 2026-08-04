@@ -1,3 +1,5 @@
+"""Small interactive session selector used by the command-line interface."""
+
 import curses
 import os
 import sys

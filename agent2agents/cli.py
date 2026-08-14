@@ -301,28 +301,41 @@ def select_codex_session(selected_file, target_cwd, purpose):
 
 
 def update_tool():
-    """Update the Agent2Agents installation."""
-    print("🔄 Checking for updates and updating Agent2Agents...")
-    
-    current_script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    install_dirs = [
-        os.path.expanduser("~/.agent2agents"),
-    ]
-    
-    target_git_dir = None
-    if os.path.exists(os.path.join(current_script_dir, ".git")):
-        target_git_dir = current_script_dir
-    else:
-        for install_dir in install_dirs:
-            if os.path.exists(os.path.join(install_dir, ".git")):
-                target_git_dir = install_dir
-                break
+    """Update the Agent2Agents installation to the latest version from GitHub."""
+    print("🔄 Checking for updates and updating Agent2Agents from GitHub...")
 
-    if target_git_dir:
-        print(f"📦 Git repository detected at: {target_git_dir}")
+    repo_url = os.environ.get(
+        "AGENT2AGENTS_REPO_URL",
+        "https://github.com/SonNX24042005/agent2agents.git",
+    )
+    install_dir = os.path.expanduser("~/.agent2agents")
+    current_script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # 1. Check if running inside a Git repository clone
+    if os.path.exists(os.path.join(current_script_dir, ".git")):
+        print(f"📦 Git repository detected at: {current_script_dir}")
         print("🔄 Pulling latest changes from GitHub...")
         try:
-            res = subprocess.run(["git", "-C", target_git_dir, "pull"], capture_output=True, text=True)
+            res = subprocess.run(["git", "-C", current_script_dir, "pull"], capture_output=True, text=True)
+            if res.returncode == 0:
+                print("✨ Git repository updated successfully!")
+                print(res.stdout.strip())
+                # Sync changes to ~/.agent2agents if different
+                if os.path.abspath(current_script_dir) != os.path.abspath(install_dir):
+                    install_sh = os.path.join(current_script_dir, "install.sh")
+                    if os.path.exists(install_sh) and platform.system() != "Windows":
+                        subprocess.run(["bash", install_sh], check=False)
+                return True
+            else:
+                print(f"⚠️ Git pull notice: {res.stderr.strip()}")
+        except Exception as e:
+            print(f"⚠️ Git pull failed: {e}")
+
+    # 2. Check if ~/.agent2agents is a Git repository
+    if os.path.exists(os.path.join(install_dir, ".git")):
+        print(f"📦 Updating {install_dir} via git pull...")
+        try:
+            res = subprocess.run(["git", "-C", install_dir, "pull"], capture_output=True, text=True)
             if res.returncode == 0:
                 print("✨ Update completed successfully!")
                 print(res.stdout.strip())
@@ -332,22 +345,48 @@ def update_tool():
         except Exception as e:
             print(f"⚠️ Git pull failed: {e}")
 
-    # Fallback to online installer script
-    print("📥 Running installer script to update...")
+    # 3. Direct clone into temporary directory and sync to install_dir
+    print("📥 Fetching latest release from GitHub...")
+    import tempfile
+    import shutil
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            res = subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, tmp_dir],
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode == 0:
+                target_pkg = os.path.join(install_dir, "agent2agents")
+                src_pkg = os.path.join(tmp_dir, "agent2agents")
+                if os.path.exists(src_pkg):
+                    os.makedirs(install_dir, exist_ok=True)
+                    if os.path.exists(target_pkg):
+                        shutil.rmtree(target_pkg)
+                    shutil.copytree(src_pkg, target_pkg)
+                    for filename in ("setup.py", "run.sh", "install.sh", "install.ps1", "README.md"):
+                        src_f = os.path.join(tmp_dir, filename)
+                        if os.path.exists(src_f):
+                            shutil.copy2(src_f, os.path.join(install_dir, filename))
+                    src_git = os.path.join(tmp_dir, ".git")
+                    target_git = os.path.join(install_dir, ".git")
+                    if os.path.exists(src_git):
+                        if os.path.exists(target_git):
+                            shutil.rmtree(target_git)
+                        shutil.copytree(src_git, target_git)
+
+                    print("\n✨ Agent2Agents updated successfully to the latest version from GitHub!")
+                    return True
+    except Exception as e:
+        print(f"⚠️ Git clone update notice: {e}")
+
+    # 4. Fallback to online installer script
+    print("📥 Running installer script fallback...")
     is_windows = platform.system() == "Windows"
-    
-    local_installer_sh = os.path.join(current_script_dir, "install.sh")
-    local_installer_ps = os.path.join(current_script_dir, "install.ps1")
-    
-    if not is_windows and os.path.exists(local_installer_sh):
-        cmd = ["bash", local_installer_sh]
-    elif is_windows and os.path.exists(local_installer_ps):
-        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", local_installer_ps]
+    if is_windows:
+        cmd = ["powershell", "-Command", "iwr -useb https://raw.githubusercontent.com/SonNX24042005/agent2agents/main/install.ps1 | iex"]
     else:
-        if is_windows:
-            cmd = ["powershell", "-Command", "iwr -useb https://raw.githubusercontent.com/SonNX24042005/agent2agents/main/install.ps1 | iex"]
-        else:
-            cmd = ["bash", "-c", "curl -fsSL https://raw.githubusercontent.com/SonNX24042005/agent2agents/main/install.sh | bash"]
+        cmd = ["bash", "-c", "curl -fsSL https://raw.githubusercontent.com/SonNX24042005/agent2agents/main/install.sh | bash"]
 
     try:
         res = subprocess.run(cmd)
@@ -355,11 +394,12 @@ def update_tool():
             print("\n✨ Agent2Agents updated successfully to the latest version!")
             return True
         else:
-            print("\n❌ Update failed. Please check your network connection or try running the installer manually.")
+            print("\n❌ Update failed. Please check your network connection.")
             return False
     except Exception as e:
         print(f"\n❌ Error during update: {e}")
         return False
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -420,9 +460,10 @@ def main():
         help="Working directory path for the project (defaults to current directory).",
     )
     parser.add_argument(
-        "--update", "-u",
+        "--update", "-u", "--upgrade", "--pull",
+        dest="update",
         action="store_true",
-        help="Update Agent2Agents from GitHub.",
+        help="Update Agent2Agents to the latest version from GitHub.",
     )
     parser.add_argument(
         "--version", "-v",

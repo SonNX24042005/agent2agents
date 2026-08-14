@@ -124,6 +124,20 @@ class CliModeTests(unittest.TestCase):
             self.assertTrue(options[0].startswith("✍️"))
             self.assertEqual(result, "/p/rollout-1.jsonl")
 
+    def test_update_flags_trigger_update_tool(self):
+        from agent2agents.cli import main
+        import sys
+
+        for flag in ["-u", "--update", "--upgrade", "--pull"]:
+            with self.subTest(flag=flag), \
+                 mock.patch.object(sys, "argv", ["a2a", flag]), \
+                 mock.patch("agent2agents.cli.update_tool", return_value=True) as mock_update, \
+                 mock.patch("sys.exit", side_effect=SystemExit) as mock_exit:
+                with self.assertRaises(SystemExit):
+                    main()
+                mock_update.assert_called_once()
+                mock_exit.assert_called_once_with(0)
+
 
 if __name__ == "__main__":
     unittest.main()

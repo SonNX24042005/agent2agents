@@ -23,11 +23,15 @@ fi
 # 2. Setup installation directory
 mkdir -p "$INSTALL_DIR"
 
-if [ -d "$SCRIPT_DIR/agent2agents" ]; then
+if [ -d "$SCRIPT_DIR/agent2agents" ] && [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
     # Running from cloned repo directory
     cp -r "$SCRIPT_DIR/agent2agents" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/setup.py" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/run.sh" "$INSTALL_DIR/" 2>/dev/null || true
+    if [ -d "$SCRIPT_DIR/.git" ]; then
+        rm -rf "$INSTALL_DIR/.git"
+        cp -r "$SCRIPT_DIR/.git" "$INSTALL_DIR/" 2>/dev/null || true
+    fi
 else
     # Downloading from GitHub repository
     REPO_URL="${AGENT2AGENTS_REPO_URL:-https://github.com/SonNX24042005/agent2agents.git}"
@@ -37,7 +41,15 @@ else
     else
         echo "Downloading source code into $INSTALL_DIR..."
         if command -v git &>/dev/null; then
-            git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+            TEMP_CLONE=$(mktemp -d)
+            git clone --depth 1 "$REPO_URL" "$TEMP_CLONE"
+            mkdir -p "$INSTALL_DIR"
+            cp -r "$TEMP_CLONE/agent2agents" "$INSTALL_DIR/"
+            cp "$TEMP_CLONE/setup.py" "$INSTALL_DIR/" 2>/dev/null || true
+            cp "$TEMP_CLONE/run.sh" "$INSTALL_DIR/" 2>/dev/null || true
+            rm -rf "$INSTALL_DIR/.git"
+            cp -r "$TEMP_CLONE/.git" "$INSTALL_DIR/" 2>/dev/null || true
+            rm -rf "$TEMP_CLONE"
         else
             curl -fsSL "https://raw.githubusercontent.com/SonNX24042005/agent2agents/main/run.sh" -o "$INSTALL_DIR/run.sh"
         fi

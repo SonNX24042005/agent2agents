@@ -155,7 +155,7 @@ pip install -e .
 | `-o`, `--output` | Ghi file đích vào đường dẫn chỉ định | `a2a --codex -o /tmp/import.jsonl` |
 | `-s`, `--session` | Chỉ định Antigravity Session ID | `a2a --reverse -s 2c3ed564-11bb-435c-b8f5` |
 | `-c`, `--cwd` | Chỉ định đường dẫn dự án đích | `a2a -c /path/to/target/project` |
-| `-u`, `--update` | Cập nhật công cụ lên phiên bản mới nhất từ GitHub | `a2a --update` |
+| `-u`, `--update`, `--upgrade`, `--pull` | Cập nhật công cụ lên phiên bản mới nhất từ GitHub | `a2a --update` hoặc `a2a --upgrade` |
 | `-v`, `--version` | Hiển thị thông tin phiên bản hiện tại | `a2a --version` |
 | `--no-launch` | Chỉ chuyển đổi, không tự động mở agent đích | `a2a --codex --no-launch` |
 

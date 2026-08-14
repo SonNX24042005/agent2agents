@@ -129,11 +129,14 @@ class ClaudeToAntigravityConverter:
         existing_dbs = set(f for f in os.listdir(conversations_dir) if f.endswith(".db") and not f.endswith(".db-shm") and not f.endswith(".db-wal"))
 
         init_prompt = "Initializing imported session history..."
+        env = dict(os.environ)
+        env["AGENT2AGENTS_INITIALIZING"] = "1"
         res = subprocess.run(
             ["agy", "--dangerously-skip-permissions", "-p", init_prompt],
             cwd=self.target_cwd,
             capture_output=True,
-            text=True
+            text=True,
+            env=env
         )
 
         current_dbs = set(f for f in os.listdir(conversations_dir) if f.endswith(".db") and not f.endswith(".db-shm") and not f.endswith(".db-wal"))

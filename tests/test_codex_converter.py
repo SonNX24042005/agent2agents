@@ -126,6 +126,24 @@ class ClaudeToCodexConverterTests(unittest.TestCase):
                 ["Tạo báo cáo", "Đã tạo xong.\n\nBạn có thể kiểm tra.", "Mở rộng báo cáo"],
             )
 
+            assistant_phases = [
+                record["payload"]["phase"]
+                for record in records
+                if record["type"] == "response_item"
+                and record["payload"].get("type") == "message"
+                and record["payload"].get("role") == "assistant"
+            ]
+            self.assertEqual(assistant_phases, ["final_answer"])
+            self.assertIsNotNone(
+                next(
+                    record["payload"]["internal_chat_message_metadata_passthrough"]
+                    for record in records
+                    if record["type"] == "response_item"
+                    and record["payload"].get("type") == "message"
+                    and record["payload"].get("role") == "assistant"
+                )["turn_id"]
+            )
+
             user_events = [
                 record["payload"]["message"]
                 for record in records

@@ -1,8 +1,9 @@
 import argparse
-import sys
+import glob
 import os
 import platform
 import subprocess
+import sys
 
 from .adapters.antigravity import AntigravityTranscriptAdapter
 from .adapters.codex import CodexRolloutAdapter
@@ -91,22 +92,99 @@ def launch_agent(command, cwd, enabled=True):
     return result.returncode
 
 
+def resolve_claude_session_path(input_val, target_cwd=None):
+    """Resolve a user-provided Claude session ID, filename, or filepath to a JSONL path."""
+    if not input_val or not str(input_val).strip():
+        return None
+    input_val = str(input_val).strip()
+
+    # 1. Direct path check
+    expanded = os.path.abspath(os.path.expanduser(input_val))
+    if os.path.isfile(expanded):
+        return expanded
+
+    session_id = input_val[:-6] if input_val.endswith(".jsonl") else input_val
+
+    # 2. Check in current project directory
+    if target_cwd:
+        sanitized = "-" + os.path.abspath(target_cwd).strip("/").replace("/", "-")
+        project_dir = os.path.expanduser(os.path.join("~/.claude/projects", sanitized))
+        candidate = os.path.join(project_dir, f"{session_id}.jsonl")
+        if os.path.isfile(candidate):
+            return candidate
+
+    # 3. Search across all projects in ~/.claude/projects
+    claude_projects_dir = os.path.expanduser("~/.claude/projects")
+    if os.path.isdir(claude_projects_dir):
+        pattern = os.path.join(claude_projects_dir, "*", f"*{session_id}*.jsonl")
+        matches = glob.glob(pattern)
+        if matches:
+            matches.sort(key=os.path.getmtime, reverse=True)
+            return matches[0]
+
+    return expanded
+
+
+def resolve_antigravity_session_id(input_val):
+    """Clean and return an Antigravity session ID from input string or file path."""
+    if not input_val or not str(input_val).strip():
+        return None
+    cleaned = str(input_val).strip()
+    cleaned = os.path.basename(cleaned)
+    if cleaned.endswith(".db"):
+        cleaned = cleaned[:-3]
+    return cleaned
+
+
+def resolve_codex_session_path(input_val, codex_home=None):
+    """Resolve a user-provided Codex session ID, filename, or filepath to a rollout JSONL path."""
+    if not input_val or not str(input_val).strip():
+        return None
+    input_val = str(input_val).strip()
+
+    # 1. Direct path check
+    expanded = os.path.abspath(os.path.expanduser(input_val))
+    if os.path.isfile(expanded):
+        return expanded
+
+    home = codex_home or os.environ.get("CODEX_HOME") or "~/.codex"
+    home = os.path.abspath(os.path.expanduser(home))
+
+    # 2. Search by session ID in ~/.codex/sessions/**/rollout-*.jsonl
+    session_id = input_val
+    if session_id.endswith(".jsonl"):
+        session_id = session_id[:-6]
+    if session_id.startswith("rollout-"):
+        session_id = session_id[8:]
+
+    pattern = os.path.join(home, "sessions", "*", "*", "*", f"*{session_id}*.jsonl")
+    matches = glob.glob(pattern)
+    if matches:
+        matches.sort(key=os.path.getmtime, reverse=True)
+        return matches[0]
+
+    pattern_recursive = os.path.join(home, "sessions", "**", f"*{session_id}*.jsonl")
+    matches = glob.glob(pattern_recursive, recursive=True)
+    if matches:
+        matches.sort(key=os.path.getmtime, reverse=True)
+        return matches[0]
+
+    return expanded
+
+
 def select_claude_session(selected_file, target_cwd, purpose):
-    """Return a Claude JSONL path selected within the current project."""
+    """Return a Claude JSONL path selected within the current project or entered manually."""
     if selected_file:
+        resolved = resolve_claude_session_path(selected_file, target_cwd)
+        if resolved and os.path.isfile(resolved):
+            return resolved
         return selected_file
 
     project_name = os.path.basename(target_cwd)
     sessions = ClaudeToAntigravityConverter.get_project_sessions(target_cwd=target_cwd)
-    if not sessions:
-        print(
-            f"❌ No Claude session logs (.jsonl) found for project '{project_name}' "
-            "in ~/.claude/projects/!",
-            file=sys.stderr,
-        )
-        sys.exit(1)
 
-    options_display = []
+    manual_label = "✍️  Enter Claude session ID or path manually"
+    options_display = [manual_label]
     for session in sessions:
         prompt_snippet = session["first_prompt"][:75].replace("\n", " ")
         if len(session["first_prompt"]) > 75:
@@ -121,24 +199,37 @@ def select_claude_session(selected_file, target_cwd, purpose):
         print("❌ Selection cancelled by user.")
         sys.exit(0)
 
-    print(f"✅ Selected session: {sessions[choice_idx]['filename']}\n")
-    return sessions[choice_idx]["path"]
+    if choice_idx == 0:
+        manual_input = input("Enter Claude session ID or JSONL path: ").strip()
+        if not manual_input:
+            print("❌ No session ID or path provided.", file=sys.stderr)
+            sys.exit(1)
+        resolved_path = resolve_claude_session_path(manual_input, target_cwd)
+        if not resolved_path or not os.path.isfile(resolved_path):
+            print(f"❌ Claude session file not found: {manual_input}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✅ Selected session: {os.path.basename(resolved_path)}\n")
+        return resolved_path
+
+    selected_session = sessions[choice_idx - 1]
+    print(f"✅ Selected session: {selected_session['filename']}\n")
+    return selected_session["path"]
 
 
 def select_antigravity_session(selected_session, target_cwd, purpose):
-    """Return an Antigravity session ID selected within the current project."""
+    """Return an Antigravity session ID selected within the current project or entered manually."""
     if selected_session:
-        return selected_session
+        return resolve_antigravity_session_id(selected_session)
 
     sessions = AntigravityToClaudeConverter.get_agy_sessions(target_cwd=target_cwd)
-    if not sessions:
-        print("❌ No Antigravity sessions found!", file=sys.stderr)
-        sys.exit(1)
 
-    options_display = [
-        f"{session['mtime']} | [{session['id'][:8]}] {session['preview'][:60]}"
-        for session in sessions
-    ]
+    manual_label = "✍️  Enter Antigravity session ID manually"
+    options_display = [manual_label]
+    for session in sessions:
+        options_display.append(
+            f"{session['mtime']} | [{session['id'][:8]}] {session['preview'][:60]}"
+        )
+
     choice_idx = select_option(
         options_display,
         title=f"🔍 Select an Antigravity session for {purpose}:",
@@ -146,24 +237,34 @@ def select_antigravity_session(selected_session, target_cwd, purpose):
     if choice_idx is None:
         print("❌ Selection cancelled by user.")
         sys.exit(0)
-    return sessions[choice_idx]["id"]
+
+    if choice_idx == 0:
+        manual_input = input("Enter Antigravity session ID: ").strip()
+        if not manual_input:
+            print("❌ No session ID provided.", file=sys.stderr)
+            sys.exit(1)
+        cleaned_id = resolve_antigravity_session_id(manual_input)
+        print(f"✅ Selected session: {cleaned_id}\n")
+        return cleaned_id
+
+    selected = sessions[choice_idx - 1]
+    print(f"✅ Selected session: {selected['id']}\n")
+    return selected["id"]
 
 
 def select_codex_session(selected_file, target_cwd, purpose):
-    """Return a Codex rollout path selected within the current project."""
+    """Return a Codex rollout path selected within the current project or entered manually."""
     if selected_file:
+        resolved = resolve_codex_session_path(selected_file)
+        if resolved and os.path.isfile(resolved):
+            return resolved
         return selected_file
 
     adapter = CodexRolloutAdapter()
     sessions = adapter.get_project_sessions(target_cwd=target_cwd)
-    if not sessions:
-        print(
-            "❌ No Codex rollout sessions found for this project in ~/.codex/sessions/!",
-            file=sys.stderr,
-        )
-        sys.exit(1)
 
-    options_display = []
+    manual_label = "✍️  Enter Codex session ID or path manually"
+    options_display = [manual_label]
     for session in sessions:
         session_id = session.get("id") or "unknown"
         prompt = session.get("first_prompt", "Imported conversation")
@@ -181,7 +282,22 @@ def select_codex_session(selected_file, target_cwd, purpose):
     if choice_idx is None:
         print("❌ Selection cancelled by user.")
         sys.exit(0)
-    return sessions[choice_idx]["path"]
+
+    if choice_idx == 0:
+        manual_input = input("Enter Codex session ID or rollout JSONL path: ").strip()
+        if not manual_input:
+            print("❌ No session ID or path provided.", file=sys.stderr)
+            sys.exit(1)
+        resolved_path = resolve_codex_session_path(manual_input)
+        if not resolved_path or not os.path.isfile(resolved_path):
+            print(f"❌ Codex rollout file not found for: {manual_input}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✅ Selected session: {os.path.basename(resolved_path)}\n")
+        return resolved_path
+
+    selected_session = sessions[choice_idx - 1]
+    print(f"✅ Selected session: {os.path.basename(selected_session['path'])}\n")
+    return selected_session["path"]
 
 
 def update_tool():
@@ -350,7 +466,7 @@ def main():
 
         if mode == "claude_to_codex":
             print("🔄 Claude Code -> Codex: converting session to Codex rollout JSONL...")
-            selected_file = select_claude_session(args.file, args.cwd, "Codex")
+            selected_file = select_claude_session(args.file or args.session, args.cwd, "Codex")
             converter = ClaudeToCodexConverter(
                 claude_jsonl_path=selected_file,
                 target_cwd=args.cwd,
@@ -369,7 +485,7 @@ def main():
 
         elif mode == "claude_to_antigravity":
             print("🔄 Claude Code -> Antigravity: converting session...")
-            selected_file = select_claude_session(args.file, args.cwd, "Antigravity")
+            selected_file = select_claude_session(args.file or args.session, args.cwd, "Antigravity")
             converter = ClaudeToAntigravityConverter(
                 claude_jsonl_path=selected_file,
                 target_cwd=args.cwd,
@@ -387,7 +503,7 @@ def main():
         elif mode == "antigravity_to_claude":
             print("🔄 Antigravity -> Claude Code: converting session...")
             selected_session = select_antigravity_session(
-                args.session, args.cwd, "Claude Code"
+                args.session or args.file, args.cwd, "Claude Code"
             )
             converter = AntigravityToClaudeConverter(
                 session_id=selected_session,
@@ -405,7 +521,7 @@ def main():
         elif mode == "antigravity_to_codex":
             print("🔄 Antigravity -> Codex: converting session...")
             selected_session = select_antigravity_session(
-                args.session, args.cwd, "Codex"
+                args.session or args.file, args.cwd, "Codex"
             )
             conversation = AntigravityTranscriptAdapter(target_cwd=args.cwd).read(
                 selected_session
@@ -427,7 +543,7 @@ def main():
 
         elif mode == "codex_to_claude":
             print("🔄 Codex -> Claude Code: converting session...")
-            selected_file = select_codex_session(args.file, args.cwd, "Claude Code")
+            selected_file = select_codex_session(args.file or args.session, args.cwd, "Claude Code")
             conversation = CodexRolloutAdapter().read(
                 selected_file,
                 target_cwd=args.cwd,
@@ -450,7 +566,7 @@ def main():
 
         elif mode == "codex_to_antigravity":
             print("🔄 Codex -> Antigravity: converting session...")
-            selected_file = select_codex_session(args.file, args.cwd, "Antigravity")
+            selected_file = select_codex_session(args.file or args.session, args.cwd, "Antigravity")
             conversation = CodexRolloutAdapter().read(
                 selected_file,
                 target_cwd=args.cwd,

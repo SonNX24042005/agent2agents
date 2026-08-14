@@ -55,6 +55,75 @@ class CliModeTests(unittest.TestCase):
         )
         run.assert_not_called()
 
+    def test_select_claude_session_with_manual_input(self):
+        from agent2agents.cli import select_claude_session
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "test-session.jsonl"
+            file_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch("agent2agents.converters.ClaudeToAntigravityConverter.get_project_sessions", return_value=[]), \
+                 mock.patch("agent2agents.cli.select_option", return_value=0) as select_option, \
+                 mock.patch("builtins.input", return_value=str(file_path)):
+                result = select_claude_session(None, temp_dir, "Antigravity")
+                select_option.assert_called_once()
+                self.assertEqual(result, str(file_path.resolve()))
+
+    def test_select_antigravity_session_with_manual_input(self):
+        from agent2agents.cli import select_antigravity_session
+
+        with mock.patch("agent2agents.converters.AntigravityToClaudeConverter.get_agy_sessions", return_value=[]), \
+             mock.patch("agent2agents.cli.select_option", return_value=0) as select_option, \
+             mock.patch("builtins.input", return_value="custom-agy-session-id"):
+            result = select_antigravity_session(None, "/tmp/project", "Claude Code")
+            select_option.assert_called_once()
+            self.assertEqual(result, "custom-agy-session-id")
+
+    def test_select_codex_session_with_manual_input(self):
+        from agent2agents.cli import select_codex_session
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rollout_path = Path(temp_dir) / "rollout-custom.jsonl"
+            rollout_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch("agent2agents.adapters.codex.CodexRolloutAdapter.get_project_sessions", return_value=[]), \
+                 mock.patch("agent2agents.cli.select_option", return_value=0) as select_option, \
+                 mock.patch("builtins.input", return_value=str(rollout_path)):
+                result = select_codex_session(None, temp_dir, "Antigravity")
+                select_option.assert_called_once()
+                self.assertEqual(result, str(rollout_path.resolve()))
+
+    def test_select_session_first_option_is_manual_entry(self):
+        from agent2agents.cli import select_claude_session, select_antigravity_session, select_codex_session
+
+        fake_claude_sessions = [{"filename": "s1.jsonl", "path": "/p/s1.jsonl", "mtime": "2026-01-01", "first_prompt": "hello"}]
+        with mock.patch("agent2agents.converters.ClaudeToAntigravityConverter.get_project_sessions", return_value=fake_claude_sessions), \
+             mock.patch("agent2agents.cli.select_option", return_value=1) as select_option:
+            result = select_claude_session(None, "/p", "Antigravity")
+            options = select_option.call_args[0][0]
+            self.assertTrue(options[0].startswith("✍️"))
+            self.assertEqual(result, "/p/s1.jsonl")
+
+        fake_agy_sessions = [{"id": "agy-1", "preview": "hello", "mtime": "2026-01-01"}]
+        with mock.patch("agent2agents.converters.AntigravityToClaudeConverter.get_agy_sessions", return_value=fake_agy_sessions), \
+             mock.patch("agent2agents.cli.select_option", return_value=1) as select_option:
+            result = select_antigravity_session(None, "/p", "Claude Code")
+            options = select_option.call_args[0][0]
+            self.assertTrue(options[0].startswith("✍️"))
+            self.assertEqual(result, "agy-1")
+
+        fake_codex_sessions = [{"id": "codex-1", "path": "/p/rollout-1.jsonl", "mtime": "2026-01-01", "first_prompt": "hello"}]
+        with mock.patch("agent2agents.adapters.codex.CodexRolloutAdapter.get_project_sessions", return_value=fake_codex_sessions), \
+             mock.patch("agent2agents.cli.select_option", return_value=1) as select_option:
+            result = select_codex_session(None, "/p", "Antigravity")
+            options = select_option.call_args[0][0]
+            self.assertTrue(options[0].startswith("✍️"))
+            self.assertEqual(result, "/p/rollout-1.jsonl")
+
 
 if __name__ == "__main__":
     unittest.main()

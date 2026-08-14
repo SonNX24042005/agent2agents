@@ -112,6 +112,40 @@ class AllRouteTests(unittest.TestCase):
                 ["Câu hỏi", "Câu trả lời"],
             )
 
+    def test_codex_writer_marks_intermediate_and_final_answers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            conversation = Conversation(
+                source_agent="test",
+                cwd=temp_dir,
+                messages=[
+                    Message(role="user", content=[{"type": "text", "text": "Hỏi"}]),
+                    Message(
+                        role="assistant",
+                        content=[{"type": "text", "text": "Đang kiểm tra"}],
+                    ),
+                    Message(
+                        role="assistant",
+                        content=[{"type": "text", "text": "Đã xong"}],
+                    ),
+                ],
+            )
+            output_path = Path(temp_dir) / "rollout.jsonl"
+            with mock.patch.object(
+                CodexRolloutAdapter, "_codex_cli_version", return_value="test"
+            ):
+                CodexRolloutAdapter().write(conversation, output_path=output_path)
+
+            phases = [
+                record["payload"]["phase"]
+                for record in (
+                    json.loads(line)
+                    for line in output_path.read_text(encoding="utf-8").splitlines()
+                )
+                if record["type"] == "response_item"
+                and record["payload"].get("role") == "assistant"
+            ]
+            self.assertEqual(phases, ["commentary", "final_answer"])
+
 
 if __name__ == "__main__":
     unittest.main()

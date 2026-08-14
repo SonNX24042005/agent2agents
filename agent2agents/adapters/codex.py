@@ -61,7 +61,7 @@ class CodexRolloutAdapter:
             },
         )
 
-    def _user_response_item(self, text, timestamp):
+    def _user_response_item(self, text, timestamp, turn_id=None):
         return self._line(
             timestamp,
             "response_item",
@@ -71,7 +71,9 @@ class CodexRolloutAdapter:
                 "content": [{"type": "input_text", "text": text}],
                 "id": self._message_id(),
                 "phase": None,
-                "internal_chat_message_metadata_passthrough": None,
+                "internal_chat_message_metadata_passthrough": (
+                    {"turn_id": turn_id} if turn_id else None
+                ),
             },
         )
 
@@ -90,19 +92,19 @@ class CodexRolloutAdapter:
             },
         )
 
-    def _assistant_event(self, text, timestamp):
+    def _assistant_event(self, text, timestamp, phase="commentary"):
         return self._line(
             timestamp,
             "event_msg",
             {
                 "type": "agent_message",
                 "message": text,
-                "phase": "final",
+                "phase": phase,
                 "memory_citation": None,
             },
         )
 
-    def _assistant_response_item(self, text, timestamp):
+    def _assistant_response_item(self, text, timestamp, phase="commentary", turn_id=None):
         return self._line(
             timestamp,
             "response_item",
@@ -111,8 +113,10 @@ class CodexRolloutAdapter:
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": text}],
                 "id": self._message_id(),
-                "phase": "final",
-                "internal_chat_message_metadata_passthrough": None,
+                "phase": phase,
+                "internal_chat_message_metadata_passthrough": (
+                    {"turn_id": turn_id} if turn_id else None
+                ),
             },
         )
 
@@ -177,7 +181,8 @@ class CodexRolloutAdapter:
         os.makedirs(os.path.dirname(target), exist_ok=True)
 
         records = [self._metadata(session_id, session_timestamp, conversation)]
-        for message in conversation.messages:
+        current_turn_id = None
+        for index, message in enumerate(conversation.messages):
             if message.role not in ("user", "assistant"):
                 continue
             text = message.text()
@@ -185,11 +190,29 @@ class CodexRolloutAdapter:
                 continue
             timestamp = utc_timestamp(message.timestamp)
             if message.role == "user":
-                records.append(self._user_response_item(text, timestamp))
+                current_turn_id = str(uuid.uuid4())
+                records.append(
+                    self._user_response_item(text, timestamp, current_turn_id)
+                )
                 records.append(self._user_event(text, timestamp))
             else:
-                records.append(self._assistant_event(text, timestamp))
-                records.append(self._assistant_response_item(text, timestamp))
+                has_later_assistant_text = False
+                for later in conversation.messages[index + 1 :]:
+                    if later.role == "user" and later.text():
+                        break
+                    if later.role == "assistant" and later.text():
+                        has_later_assistant_text = True
+                        break
+                phase = "commentary" if has_later_assistant_text else "final_answer"
+                records.append(self._assistant_event(text, timestamp, phase))
+                records.append(
+                    self._assistant_response_item(
+                        text,
+                        timestamp,
+                        phase,
+                        current_turn_id,
+                    )
+                )
 
         created = False
         try:

@@ -71,49 +71,118 @@ class ClaudeToAntigravityConverter:
                 break
         return bytes(buf)
 
-    @classmethod
-    def build_user_payload(cls, template_payload, orig_text_bytes, new_text_str):
-        new_bytes = new_text_str.encode("utf-8")
-        pos1 = template_payload.find(orig_text_bytes)
-        if pos1 == -1:
-            return template_payload
-        pos2 = template_payload.find(orig_text_bytes, pos1 + len(orig_text_bytes))
-        if pos2 == -1:
-            return template_payload
-
-        part0 = template_payload[:pos1 - 1]
-        part1 = template_payload[pos1 + len(orig_text_bytes) : pos2 - 1]
-        part2 = template_payload[pos2 + len(orig_text_bytes):]
-
-        return (
-            part0 + 
-            b"\x12" + cls.encode_varint(len(new_bytes)) + new_bytes + 
-            part1 + 
-            b"\x0a" + cls.encode_varint(len(new_bytes)) + new_bytes + 
-            part2
-        )
+    @staticmethod
+    def decode_varint(data, offset):
+        val = 0
+        shift = 0
+        i = offset
+        while i < len(data):
+            b = data[i]
+            i += 1
+            val |= (b & 0x7f) << shift
+            if not (b & 0x80):
+                return val, i - offset
+            shift += 7
+        return val, i - offset
 
     @classmethod
-    def build_assistant_payload(cls, template_payload, orig_text_bytes, new_text_str):
-        new_bytes = new_text_str.encode("utf-8")
-        pos1 = template_payload.find(orig_text_bytes)
-        if pos1 == -1:
-            return template_payload
-        pos2 = template_payload.find(orig_text_bytes, pos1 + len(orig_text_bytes))
-        if pos2 == -1:
-            return template_payload
+    def parse_protobuf_fields(cls, payload):
+        """Parse top-level protobuf fields into a dict of {tag: (wire, value)}."""
+        fields = {}
+        i = 0
+        while i < len(payload):
+            tag_val, tag_len = cls.decode_varint(payload, i)
+            if tag_len == 0:
+                break
+            tag = tag_val >> 3
+            wire = tag_val & 0x7
+            data_start = i + tag_len
+            if wire == 0:
+                val, v_len = cls.decode_varint(payload, data_start)
+                data_end = data_start + v_len
+                val_data = val
+            elif wire == 2:
+                length, l_len = cls.decode_varint(payload, data_start)
+                content_start = data_start + l_len
+                data_end = content_start + length
+                val_data = payload[content_start:data_end]
+            elif wire == 1:
+                data_end = data_start + 8
+                val_data = payload[data_start:data_end]
+            elif wire == 5:
+                data_end = data_start + 4
+                val_data = payload[data_start:data_end]
+            else:
+                break
+            fields[tag] = (wire, val_data)
+            i = data_end
+        return fields
 
-        part0 = template_payload[:pos1 - 1]
-        part1 = template_payload[pos1 + len(orig_text_bytes) : pos2 - 1]
-        part2 = template_payload[pos2 + len(orig_text_bytes):]
+    @classmethod
+    def build_user_payload(cls, template_payload, new_text_str, meta_bytes):
+        prompt_bytes = new_text_str.encode("utf-8")
+        fields = cls.parse_protobuf_fields(template_payload)
+        f19_entry = fields.get(19)
+        if not f19_entry or not f19_entry[1]:
+            return template_payload
+        f19_data = f19_entry[1]
 
-        return (
-            part0 + 
-            b"\x0a" + cls.encode_varint(len(new_bytes)) + new_bytes + 
-            part1 + 
-            b"\x42" + cls.encode_varint(len(new_bytes)) + new_bytes + 
-            part2
-        )
+        i = 0
+        u_tail_offset = None
+        while i < len(f19_data):
+            tag_val, tag_len = cls.decode_varint(f19_data, i)
+            if tag_len == 0:
+                break
+            tag = tag_val >> 3
+            wire = tag_val & 0x7
+            if tag == 12:
+                u_tail_offset = i
+                break
+            data_start = i + tag_len
+            if wire == 0:
+                _, v_len = cls.decode_varint(f19_data, data_start)
+                i = data_start + v_len
+            elif wire == 2:
+                l, l_len = cls.decode_varint(f19_data, data_start)
+                i = data_start + l_len + l
+            elif wire == 1:
+                i = data_start + 8
+            elif wire == 5:
+                i = data_start + 4
+            else:
+                break
+
+        if u_tail_offset is None:
+            u_tail_offset = f19_data.find(b"\x62", 30)
+            if u_tail_offset == -1:
+                return template_payload
+
+        u_f19_tail = f19_data[u_tail_offset:]
+        f2 = b"\x12" + cls.encode_varint(len(prompt_bytes)) + prompt_bytes
+        f3_sub = b"\x0a" + cls.encode_varint(len(prompt_bytes)) + prompt_bytes
+        f3 = b"\x1a" + cls.encode_varint(len(f3_sub)) + f3_sub
+        f4 = b"\x22\x00"
+        f19_content = f2 + f3 + f4 + u_f19_tail
+        f19 = b"\x9a\x01" + cls.encode_varint(len(f19_content)) + f19_content
+        return b"\x08\x0e\x20\x03\x2a" + cls.encode_varint(len(meta_bytes)) + meta_bytes + f19
+
+    @classmethod
+    def build_assistant_payload(cls, template_payload, new_text_str, meta_bytes):
+        resp_bytes = new_text_str.encode("utf-8")
+        fields = cls.parse_protobuf_fields(template_payload)
+        f20_entry = fields.get(20)
+        if not f20_entry or not f20_entry[1]:
+            return template_payload
+        f20_data = f20_entry[1]
+
+        tag_val, tag_len = cls.decode_varint(f20_data, 0)
+        f1_len, f1_l_b = cls.decode_varint(f20_data, tag_len)
+        a_f20_tail = f20_data[tag_len + f1_l_b + f1_len:]
+
+        f1 = b"\x0a" + cls.encode_varint(len(resp_bytes)) + resp_bytes
+        f20_content = f1 + a_f20_tail
+        f20 = b"\xa2\x01" + cls.encode_varint(len(f20_content)) + f20_content
+        return b"\x08\x0f\x20\x03\x2a" + cls.encode_varint(len(meta_bytes)) + meta_bytes + f20
 
     def create_native_session(self):
         """Create native Antigravity CLI session with valid DB initialization, native TUI rendering, and 100% exact Claude transcript matching."""
@@ -129,14 +198,11 @@ class ClaudeToAntigravityConverter:
         existing_dbs = set(f for f in os.listdir(conversations_dir) if f.endswith(".db") and not f.endswith(".db-shm") and not f.endswith(".db-wal"))
 
         init_prompt = "Initializing imported session history..."
-        env = dict(os.environ)
-        env["AGENT2AGENTS_INITIALIZING"] = "1"
         res = subprocess.run(
             ["agy", "--dangerously-skip-permissions", "-p", init_prompt],
             cwd=self.target_cwd,
             capture_output=True,
-            text=True,
-            env=env
+            text=True
         )
 
         current_dbs = set(f for f in os.listdir(conversations_dir) if f.endswith(".db") and not f.endswith(".db-shm") and not f.endswith(".db-wal"))
@@ -160,18 +226,33 @@ class ClaudeToAntigravityConverter:
             cur = conn.cursor()
             rows = cur.execute("SELECT idx, step_type, status, metadata, step_payload FROM steps").fetchall()
 
-            if len(rows) >= 3:
-                u_meta_tpl, u_payload_tpl = rows[0][3], rows[0][4]
-                a_meta_tpl, a_payload_tpl = rows[2][3], rows[2][4]
+            u_meta_tpl, u_payload_tpl = None, None
+            a_meta_tpl, a_payload_tpl = None, None
+            for r in rows:
+                if r[1] == 14 and u_payload_tpl is None and r[4] and len(r[4]) > 500:
+                    u_meta_tpl, u_payload_tpl = r[3], r[4]
+                elif r[1] == 15 and a_payload_tpl is None and r[4] and len(r[4]) > 100:
+                    a_meta_tpl, a_payload_tpl = r[3], r[4]
 
+            # Fallback search across existing databases if templates not found
+            if not u_payload_tpl or not a_payload_tpl:
+                for other_db in sorted([os.path.join(conversations_dir, f) for f in os.listdir(conversations_dir) if f.endswith(".db")], key=os.path.getmtime, reverse=True):
+                    try:
+                        oc = sqlite3.connect(other_db)
+                        for r in oc.execute("SELECT idx, step_type, status, metadata, step_payload FROM steps").fetchall():
+                            if r[1] == 14 and u_payload_tpl is None and r[4] and len(r[4]) > 500:
+                                u_meta_tpl, u_payload_tpl = r[3], r[4]
+                            elif r[1] == 15 and a_payload_tpl is None and r[4] and len(r[4]) > 100:
+                                a_meta_tpl, a_payload_tpl = r[3], r[4]
+                        oc.close()
+                        if u_payload_tpl and a_payload_tpl:
+                            break
+                    except Exception:
+                        pass
+
+            if u_payload_tpl and a_payload_tpl:
                 uuids_u = re.findall(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", u_meta_tpl)
-                u_orig_step_uuid = uuids_u[0] if uuids_u else None
-
-                uuids_a_payload = re.findall(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", a_payload_tpl)
-                a_orig_step_uuid = uuids_a_payload[3] if len(uuids_a_payload) > 3 else (uuids_a_payload[0] if uuids_a_payload else None)
-
-                u_orig_text = init_prompt.encode("utf-8")
-                a_orig_text = res.stdout.strip().encode("utf-8")
+                uuids_a = re.findall(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", a_meta_tpl)
 
                 cur.execute("DELETE FROM steps;")
 
@@ -186,34 +267,27 @@ class ClaudeToAntigravityConverter:
                     turn_u_uuid = str(uuid.uuid4()).encode("utf-8")
                     turn_a_uuid = str(uuid.uuid4()).encode("utf-8")
 
-                    # 1. Build USER_INPUT step
-                    u_payload = self.build_user_payload(u_payload_tpl, u_orig_text, u_t)
                     u_meta = u_meta_tpl
-                    if u_orig_step_uuid:
-                        u_meta = u_meta.replace(u_orig_step_uuid, turn_u_uuid)
-                        u_payload = u_payload.replace(u_orig_step_uuid, turn_u_uuid)
+                    if uuids_u:
+                        u_meta = u_meta.replace(uuids_u[0], turn_u_uuid)
+                    u_payload = self.build_user_payload(u_payload_tpl, u_t, u_meta)
 
                     cur.execute(
                         "INSERT INTO steps (idx, step_type, status, has_subtrajectory, metadata, error_details, permissions, task_details, render_info, step_payload, step_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (db_step_idx, 14, 3, "false", u_meta, None, None, None, None, u_payload, 0)
+                        (db_step_idx, 14, 3, 0, u_meta, None, None, None, None, u_payload, 0)
                     )
                     last_u_idx = db_step_idx
                     db_step_idx += 1
 
-                    # 2. Build PLANNER_RESPONSE step linked to turn_u_uuid
                     asst_text = a_t if a_t else "Completed."
-                    a_payload = self.build_assistant_payload(a_payload_tpl, a_orig_text, asst_text)
                     a_meta = a_meta_tpl
-                    if a_orig_step_uuid:
-                        a_meta = a_meta.replace(a_orig_step_uuid, turn_a_uuid)
-                        a_payload = a_payload.replace(a_orig_step_uuid, turn_a_uuid)
-                    if u_orig_step_uuid:
-                        a_meta = a_meta.replace(u_orig_step_uuid, turn_u_uuid)
-                        a_payload = a_payload.replace(u_orig_step_uuid, turn_u_uuid)
+                    if uuids_a:
+                        a_meta = a_meta.replace(uuids_a[0], turn_a_uuid)
+                    a_payload = self.build_assistant_payload(a_payload_tpl, asst_text, a_meta)
 
                     cur.execute(
                         "INSERT INTO steps (idx, step_type, status, has_subtrajectory, metadata, error_details, permissions, task_details, render_info, step_payload, step_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (db_step_idx, 15, 3, "false", a_meta, None, None, None, None, a_payload, 0)
+                        (db_step_idx, 15, 3, 0, a_meta, None, None, None, None, a_payload, 0)
                     )
                     db_step_idx += 1
 
@@ -231,24 +305,6 @@ class ClaudeToAntigravityConverter:
         transcript_full_path = os.path.join(brain_dir, "transcript_full.jsonl")
 
         now_iso = datetime.now().isoformat() + "Z"
-
-        # Build comprehensive CHECKPOINT summary content listing ALL user prompts
-        user_prompts_summary_lines = []
-        for idx, pair in enumerate(self.qa_pairs):
-            u_str = pair.get("user", "").strip().replace("\n", " ")
-            if len(u_str) > 120:
-                u_str = u_str[:120] + "..."
-            user_prompts_summary_lines.append(f"{idx + 1}. {u_str}")
-
-        prompt_summary_text = "\n".join(user_prompts_summary_lines)
-        first_u = self.qa_pairs[0].get("user", "").strip() if self.qa_pairs else "Imported Claude Session"
-
-        cp_content = (
-            f"{{{{ CHECKPOINT 0 }}}}\n\n"
-            f"# USER Objective:\n{first_u[:200]}\n\n"
-            f"# Complete User Prompts History ({len(self.qa_pairs)} prompts imported):\n"
-            f"{prompt_summary_text}\n"
-        )
 
         steps = []
         step_idx = 0
@@ -282,29 +338,6 @@ class ClaudeToAntigravityConverter:
                 "content": asst_content
             })
             step_idx += 1
-
-        # Append CHECKPOINT step aligned with final step_idx
-        steps.append({
-            "step_index": step_idx,
-            "source": "SYSTEM",
-            "type": "CHECKPOINT",
-            "status": "DONE",
-            "created_at": now_iso,
-            "content": cp_content
-        })
-
-        # Add matching CHECKPOINT row to SQLite steps DB to keep indices 100% in sync
-        try:
-            conn = sqlite3.connect(db_path)
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO steps (idx, step_type, status, has_subtrajectory, metadata, error_details, permissions, task_details, render_info, step_payload, step_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (step_idx, 98, 3, "false", None, None, None, None, None, None, 0)
-            )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"⚠️ Warning appending CHECKPOINT to SQLite steps DB: {e}")
 
         with open(transcript_path, "w", encoding="utf-8") as f:
             for s in steps:
@@ -365,7 +398,7 @@ class ClaudeToAntigravityConverter:
                 "conversation_id": session_id,
                 "title": title_text,
                 "preview": preview_text,
-                "step_count": len(self.qa_pairs) * 2 + 1,
+                "step_count": len(self.qa_pairs) * 2,
                 "last_modified_time": now_str,
                 "workspace_uris": workspace_uri,
                 "status": "",
@@ -414,7 +447,7 @@ class ClaudeToAntigravityConverter:
                     "ID": session_id,
                     "Title": "",
                     "Preview": first_msg[:100],
-                    "NumSteps": len(self.qa_pairs) * 2 + 1,
+                    "NumSteps": len(self.qa_pairs) * 2,
                     "Loaded": True,
                     "UpdatedAt": now_iso,
                     "WorkspaceURIs": [f"file://{self.target_cwd}"],

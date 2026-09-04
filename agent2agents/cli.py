@@ -368,12 +368,22 @@ def update_tool():
                         src_f = os.path.join(tmp_dir, filename)
                         if os.path.exists(src_f):
                             shutil.copy2(src_f, os.path.join(install_dir, filename))
+                    tests_src = os.path.join(tmp_dir, "tests")
+                    tests_dst = os.path.join(install_dir, "tests")
+                    if os.path.exists(tests_src):
+                        if os.path.exists(tests_dst):
+                            shutil.rmtree(tests_dst)
+                        shutil.copytree(tests_src, tests_dst)
                     src_git = os.path.join(tmp_dir, ".git")
                     target_git = os.path.join(install_dir, ".git")
                     if os.path.exists(src_git):
                         if os.path.exists(target_git):
                             shutil.rmtree(target_git)
                         shutil.copytree(src_git, target_git)
+
+                    install_sh = os.path.join(install_dir, "install.sh")
+                    if os.path.exists(install_sh) and platform.system() != "Windows":
+                        subprocess.run(["bash", install_sh], check=False)
 
                     print("\n✨ Agent2Agents updated successfully to the latest version from GitHub!")
                     return True

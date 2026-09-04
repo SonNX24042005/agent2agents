@@ -26,8 +26,12 @@ mkdir -p "$INSTALL_DIR"
 if [ -d "$SCRIPT_DIR/agent2agents" ] && [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
     # Running from cloned repo directory
     cp -r "$SCRIPT_DIR/agent2agents" "$INSTALL_DIR/"
+    cp -r "$SCRIPT_DIR/tests" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/setup.py" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/run.sh" "$INSTALL_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/install.sh" "$INSTALL_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/install.ps1" "$INSTALL_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/README.md" "$INSTALL_DIR/" 2>/dev/null || true
     if [ -d "$SCRIPT_DIR/.git" ]; then
         rm -rf "$INSTALL_DIR/.git"
         cp -r "$SCRIPT_DIR/.git" "$INSTALL_DIR/" 2>/dev/null || true
@@ -37,7 +41,11 @@ else
     REPO_URL="${AGENT2AGENTS_REPO_URL:-https://github.com/SonNX24042005/agent2agents.git}"
     if [ -d "$INSTALL_DIR/.git" ]; then
         echo "Updating existing installation in $INSTALL_DIR..."
-        git -C "$INSTALL_DIR" pull --quiet || true
+        if ! git -C "$INSTALL_DIR" pull --quiet 2>/dev/null; then
+            echo "Git pull encountered an issue, fetching and resetting to origin/main..."
+            git -C "$INSTALL_DIR" fetch --quiet origin main 2>/dev/null || true
+            git -C "$INSTALL_DIR" reset --hard origin/main --quiet 2>/dev/null || true
+        fi
     else
         echo "Downloading source code into $INSTALL_DIR..."
         if command -v git &>/dev/null; then
@@ -45,13 +53,17 @@ else
             git clone --depth 1 "$REPO_URL" "$TEMP_CLONE"
             mkdir -p "$INSTALL_DIR"
             cp -r "$TEMP_CLONE/agent2agents" "$INSTALL_DIR/"
+            cp -r "$TEMP_CLONE/tests" "$INSTALL_DIR/" 2>/dev/null || true
             cp "$TEMP_CLONE/setup.py" "$INSTALL_DIR/" 2>/dev/null || true
             cp "$TEMP_CLONE/run.sh" "$INSTALL_DIR/" 2>/dev/null || true
+            cp "$TEMP_CLONE/install.sh" "$INSTALL_DIR/" 2>/dev/null || true
+            cp "$TEMP_CLONE/install.ps1" "$INSTALL_DIR/" 2>/dev/null || true
+            cp "$TEMP_CLONE/README.md" "$INSTALL_DIR/" 2>/dev/null || true
             rm -rf "$INSTALL_DIR/.git"
             cp -r "$TEMP_CLONE/.git" "$INSTALL_DIR/" 2>/dev/null || true
             rm -rf "$TEMP_CLONE"
-        else
-            curl -fsSL "https://raw.githubusercontent.com/SonNX24042005/agent2agents/main/run.sh" -o "$INSTALL_DIR/run.sh"
+        elif command -v curl &>/dev/null && command -v tar &>/dev/null; then
+            curl -fsSL "https://github.com/SonNX24042005/agent2agents/archive/refs/heads/main.tar.gz" | tar -xz -C "$INSTALL_DIR" --strip-components=1
         fi
     fi
 fi

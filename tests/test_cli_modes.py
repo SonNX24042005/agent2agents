@@ -138,6 +138,22 @@ class CliModeTests(unittest.TestCase):
                 mock_update.assert_called_once()
                 mock_exit.assert_called_once_with(0)
 
+    def test_version_flags_display_version(self):
+        from agent2agents.cli import main
+        import sys
+        import io
+
+        for flag in ["-v", "--version"]:
+            with self.subTest(flag=flag), \
+                 mock.patch.object(sys, "argv", ["a2a", flag]), \
+                 mock.patch("sys.stdout", new_callable=io.StringIO) as mock_stdout, \
+                 mock.patch("sys.exit", side_effect=SystemExit) as mock_exit:
+                with self.assertRaises(SystemExit):
+                    main()
+                self.assertIn("Agent2Agents v1.5.1", mock_stdout.getvalue())
+                mock_exit.assert_called_once_with(0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

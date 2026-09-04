@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="agent2agents",
-    version="1.5.0",
+    version="1.5.1",
     description="Converter between Claude Code, Antigravity CLI (agy), and Codex sessions",
     author="Antigravity Pair Programmer",
     packages=find_packages(),

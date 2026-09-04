@@ -140,6 +140,7 @@ class CliModeTests(unittest.TestCase):
 
     def test_version_flags_display_version(self):
         from agent2agents.cli import main
+        from agent2agents import __version__
         import sys
         import io
 
@@ -150,8 +151,28 @@ class CliModeTests(unittest.TestCase):
                  mock.patch("sys.exit", side_effect=SystemExit) as mock_exit:
                 with self.assertRaises(SystemExit):
                     main()
-                self.assertIn("Agent2Agents v1.5.1", mock_stdout.getvalue())
+                self.assertIn(f"Agent2Agents v{__version__}", mock_stdout.getvalue())
                 mock_exit.assert_called_once_with(0)
+
+    def test_update_tool_git_pull_success(self):
+        from agent2agents.cli import update_tool
+        with mock.patch("os.path.exists", return_value=True), \
+             mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stdout="Already up to date.")
+            res = update_tool()
+            self.assertTrue(res)
+
+    def test_update_tool_git_pull_fallback_reset(self):
+        from agent2agents.cli import update_tool
+        with mock.patch("os.path.exists", return_value=True), \
+             mock.patch("subprocess.run") as mock_run:
+            def run_mock(cmd, *args, **kwargs):
+                if isinstance(cmd, list) and "pull" in cmd:
+                    return mock.Mock(returncode=1, stderr="conflict")
+                return mock.Mock(returncode=0, stdout="success")
+            mock_run.side_effect = run_mock
+            res = update_tool()
+            self.assertTrue(res)
 
 
 if __name__ == "__main__":

@@ -24,8 +24,17 @@ if (-not (Test-Path $InstallDir)) {
 }
 
 $ScriptDir = $PSScriptRoot
-if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "agent2agents"))) {
+if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "agent2agents")) -and ($ScriptDir -ne $InstallDir)) {
     Copy-Item -Path (Join-Path $ScriptDir "agent2agents") -Destination $InstallDir -Recurse -Force
+    if (Test-Path (Join-Path $ScriptDir "tests")) {
+        Copy-Item -Path (Join-Path $ScriptDir "tests") -Destination $InstallDir -Recurse -Force
+    }
+    foreach ($File in @("setup.py", "run.sh", "install.sh", "install.ps1", "README.md")) {
+        $FilePath = Join-Path $ScriptDir $File
+        if (Test-Path $FilePath) {
+            Copy-Item -Path $FilePath -Destination $InstallDir -Force
+        }
+    }
 } else {
     Write-Host "Downloading source code..."
     $ZipUrl = "https://github.com/SonNX24042005/agent2agents/archive/refs/heads/main.zip"
@@ -34,6 +43,7 @@ if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "agent2agents"))) {
     Expand-Archive -Path $ZipPath -DestinationPath $env:TEMP -Force
     Copy-Item -Path (Join-Path $env:TEMP "agent2agents-main\*") -Destination $InstallDir -Recurse -Force
     Remove-Item $ZipPath -Force
+    Remove-Item (Join-Path $env:TEMP "agent2agents-main") -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # 3. Create Bin Directory

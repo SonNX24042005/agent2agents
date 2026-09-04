@@ -321,18 +321,29 @@ def update_tool():
                 print("✨ Git repository updated successfully!")
                 print(res.stdout.strip())
                 # Sync changes to ~/.agent2agents if different
-                if os.path.abspath(current_script_dir) != os.path.abspath(install_dir):
+                if os.path.realpath(current_script_dir) != os.path.realpath(install_dir):
                     install_sh = os.path.join(current_script_dir, "install.sh")
                     if os.path.exists(install_sh) and platform.system() != "Windows":
                         subprocess.run(["bash", install_sh], check=False)
                 return True
             else:
                 print(f"⚠️ Git pull notice: {res.stderr.strip()}")
+                print("🔄 Attempting git fetch and reset to origin/main...")
+                f_res = subprocess.run(["git", "-C", current_script_dir, "fetch", "origin", "main"], capture_output=True, text=True)
+                if f_res.returncode == 0:
+                    r_res = subprocess.run(["git", "-C", current_script_dir, "reset", "--hard", "origin/main"], capture_output=True, text=True)
+                    if r_res.returncode == 0:
+                        print("✨ Git repository updated successfully via reset!")
+                        if os.path.realpath(current_script_dir) != os.path.realpath(install_dir):
+                            install_sh = os.path.join(current_script_dir, "install.sh")
+                            if os.path.exists(install_sh) and platform.system() != "Windows":
+                                subprocess.run(["bash", install_sh], check=False)
+                        return True
         except Exception as e:
             print(f"⚠️ Git pull failed: {e}")
 
-    # 2. Check if ~/.agent2agents is a Git repository
-    if os.path.exists(os.path.join(install_dir, ".git")):
+    # 2. Check if ~/.agent2agents is a Git repository (if different from current_script_dir)
+    if os.path.realpath(current_script_dir) != os.path.realpath(install_dir) and os.path.exists(os.path.join(install_dir, ".git")):
         print(f"📦 Updating {install_dir} via git pull...")
         try:
             res = subprocess.run(["git", "-C", install_dir, "pull"], capture_output=True, text=True)
@@ -342,6 +353,12 @@ def update_tool():
                 return True
             else:
                 print(f"⚠️ Git pull notice: {res.stderr.strip()}")
+                f_res = subprocess.run(["git", "-C", install_dir, "fetch", "origin", "main"], capture_output=True, text=True)
+                if f_res.returncode == 0:
+                    r_res = subprocess.run(["git", "-C", install_dir, "reset", "--hard", "origin/main"], capture_output=True, text=True)
+                    if r_res.returncode == 0:
+                        print("✨ Update completed successfully via reset!")
+                        return True
         except Exception as e:
             print(f"⚠️ Git pull failed: {e}")
 
@@ -381,9 +398,14 @@ def update_tool():
                             shutil.rmtree(target_git)
                         shutil.copytree(src_git, target_git)
 
-                    install_sh = os.path.join(install_dir, "install.sh")
-                    if os.path.exists(install_sh) and platform.system() != "Windows":
-                        subprocess.run(["bash", install_sh], check=False)
+                    if platform.system() == "Windows":
+                        install_ps1 = os.path.join(install_dir, "install.ps1")
+                        if os.path.exists(install_ps1):
+                            subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", install_ps1], check=False)
+                    else:
+                        install_sh = os.path.join(install_dir, "install.sh")
+                        if os.path.exists(install_sh):
+                            subprocess.run(["bash", install_sh], check=False)
 
                     print("\n✨ Agent2Agents updated successfully to the latest version from GitHub!")
                     return True

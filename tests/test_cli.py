@@ -4,7 +4,7 @@ from unittest import mock
 from agent2agents.cli import CONVERSION_MODES, choose_mode, launch_agent, mode_from_invocation
 
 
-class CliModeTests(unittest.TestCase):
+class CliTests(unittest.TestCase):
     def test_direct_aliases_skip_the_mode_menu(self):
         self.assertEqual(mode_from_invocation("claude2agy"), "claude_to_antigravity")
         self.assertEqual(mode_from_invocation("claude2codex.cmd"), "claude_to_codex")
@@ -177,4 +177,3 @@ class CliModeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

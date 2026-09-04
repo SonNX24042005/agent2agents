@@ -34,11 +34,21 @@ Cấu trúc chính:
 agent2agents/
 ├── canonical.py              # Định dạng hội thoại trung gian, versioned
 ├── adapters/
-│   ├── claude_code.py        # Claude Code ↔ canonical
-│   ├── antigravity.py        # Antigravity ↔ canonical
-│   └── codex.py              # Codex rollout ↔ canonical
-├── converters/               # Các workflow ghép source adapter -> target adapter
-└── cli.py                    # Entry point duy nhất
+│   ├── claude_code.py                    # Claude Code ↔ canonical
+│   ├── antigravity.py                    # Transcript Antigravity → canonical
+│   ├── antigravity_session_writer.py     # Canonical → session Antigravity
+│   └── codex.py                          # Codex rollout ↔ canonical
+├── codecs/
+│   └── antigravity_payload_codec.py      # Mã hóa payload protobuf Antigravity
+├── converters/
+│   ├── claude_to_antigravity.py          # Workflow Claude → Antigravity
+│   ├── claude_to_codex.py                # Workflow Claude → Codex
+│   ├── antigravity_to_claude.py          # Workflow Antigravity → Claude
+│   ├── conversation_to_antigravity.py    # Canonical → Antigravity
+│   ├── conversation_to_claude.py         # Canonical → Claude
+│   ├── conversation_to_codex.py          # Canonical → Codex
+│   └── conversation_to_agent.py          # Shim tương thích cho import cũ
+└── cli.py                                # Entry point duy nhất
 ```
 
 Cách này giảm số adapter cần viết từ O(n²) xuống O(n), dễ thêm agent mới và cho phép kiểm thử từng adapter độc lập. Định dạng trung gian vẫn giữ các content part mở rộng như tool call/tool result; adapter đích có thể bỏ qua những phần mà agent đó không hỗ trợ. Các route hiện tại giữ lại lịch sử user/assistant dạng văn bản; tool đang chạy, thinking nội bộ và kết quả tool cũ không được replay.

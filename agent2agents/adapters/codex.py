@@ -11,6 +11,8 @@ from ..canonical import Conversation, Message, utc_timestamp
 class CodexRolloutAdapter:
     """Import/export adapter for Codex's local rollout JSONL format."""
 
+    _USER_CONTENT_KIND_PREFIX = "user."
+
     def __init__(self, codex_home=None):
         configured_home = codex_home or os.environ.get("CODEX_HOME") or "~/.codex"
         self.codex_home = os.path.abspath(os.path.expanduser(configured_home))
@@ -39,6 +41,90 @@ class CodexRolloutAdapter:
     @staticmethod
     def _message_id():
         return "msg_{}".format(uuid.uuid4().hex)
+
+    @classmethod
+    def _is_internal_user_content_kind(cls, kind):
+        return isinstance(kind, str) and not kind.startswith(
+            cls._USER_CONTENT_KIND_PREFIX
+        )
+
+    @staticmethod
+    def _content_item_kinds(payload):
+        metadata = payload.get("internal_chat_message_metadata_passthrough")
+        if not isinstance(metadata, dict):
+            return []
+        kinds = metadata.get("content_item_kinds")
+        return kinds if isinstance(kinds, list) else []
+
+    @staticmethod
+    def _looks_like_internal_user_text(text):
+        stripped = text.lstrip()
+        return (
+            (
+                stripped.startswith("# AGENTS.md instructions")
+                and "<INSTRUCTIONS>" in stripped
+            )
+            or (
+                stripped.startswith("<environment_context>")
+                and "</environment_context>" in stripped
+            )
+            or (
+                stripped.startswith("<skill>")
+                and "<name>" in stripped
+                and "<path>" in stripped
+            )
+            or (
+                stripped.startswith("<turn_aborted>")
+                and "</turn_aborted>" in stripped
+            )
+        )
+
+    @classmethod
+    def _response_message_text(cls, payload, role):
+        content = payload.get("content") or []
+        kinds = cls._content_item_kinds(payload) if role == "user" else []
+        kinds_match_content = len(kinds) == len(content)
+
+        if (
+            role == "user"
+            and kinds
+            and not kinds_match_content
+            and all(cls._is_internal_user_content_kind(kind) for kind in kinds)
+        ):
+            return ""
+
+        text_parts = []
+        for index, part in enumerate(content):
+            if not isinstance(part, dict) or part.get("type") not in (
+                "input_text",
+                "output_text",
+            ):
+                continue
+            if (
+                role == "user"
+                and kinds_match_content
+                and cls._is_internal_user_content_kind(kinds[index])
+            ):
+                continue
+            text = part.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            if (
+                role == "user"
+                and not kinds_match_content
+                and cls._looks_like_internal_user_text(text)
+            ):
+                continue
+            text_parts.append(text)
+
+        text = "\n\n".join(text_parts)
+        if (
+            role == "user"
+            and not kinds_match_content
+            and cls._looks_like_internal_user_text(text)
+        ):
+            return ""
+        return text
 
     def _metadata(self, session_id, timestamp, conversation):
         return self._line(
@@ -267,20 +353,12 @@ class CodexRolloutAdapter:
                     role = payload.get("role")
                     if role not in ("user", "assistant"):
                         continue
-                    content = payload.get("content") or []
-                    text = []
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") in (
-                            "input_text",
-                            "output_text",
-                        ):
-                            if part.get("text"):
-                                text.append(part["text"])
+                    text = self._response_message_text(payload, role)
                     if text:
                         messages.append(
                             Message(
                                 role=role,
-                                content=[{"type": "text", "text": "\n\n".join(text)}],
+                                content=[{"type": "text", "text": text}],
                                 timestamp=utc_timestamp(record.get("timestamp")),
                             )
                         )
@@ -291,7 +369,15 @@ class CodexRolloutAdapter:
                         "agent_message": "assistant",
                     }.get(event_type)
                     text = payload.get("message")
-                    if role and isinstance(text, str) and text.strip():
+                    if (
+                        role
+                        and isinstance(text, str)
+                        and text.strip()
+                        and not (
+                            role == "user"
+                            and self._looks_like_internal_user_text(text)
+                        )
+                    ):
                         event_messages.append(
                             Message(
                                 role=role,
